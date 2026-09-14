@@ -13,6 +13,32 @@ Pid_Out:
     bf         r3, XUD_TokenOut_BufferFull
     ldw        r1, r3[3]                        // Load buffer from EP structure
 
+#ifndef XUD_DISABLE_OUT_DATA_TIMEOUT
+    // Guard A: arm a deadline across the OUT-data body ONLY for isochronous (audio) OUT
+    // endpoints. A marginal/malformed iso-OUT packet (dirty truncation, lost EOP, stray
+    // token) otherwise strands the reader on the bare body 'in' (XUD_RxData.S:NextRxWord)
+    // forever -> permanent audio-pipeline lockup needing a power-cycle.
+    //
+    // CRITICAL SCOPE (fixes a bug that broke USB enumeration on real hardware): doRXData is
+    // SHARED by every OUT endpoint, so an unconditional arm here also fires on EP0
+    // control-OUT (SETUP data / control-write data / control-read status stages). Aborting
+    // and un-ACKing those mid-enumeration makes the device fail to enumerate entirely
+    // (host: "device descriptor read, error -71" / "not responding to setup address").
+    // Control/bulk/interrupt endpoints already have their own retry/handshake recovery and
+    // MUST NOT be bounded by this iso-only guard. EP type lives at r3[5]; 0 == ISO (the same
+    // field/sense tested at CheckEpTypeOut below). r4/r8/r11 are re-initialised in doRXData.
+    ldw        r11, r3[5]                       // EP type (0 == ISO)
+    bt         r11, OutReady                    // non-ISO (control/bulk/int): do NOT arm
+    ldw        r11, sp[STACK_OUT_TIMER]
+    setc       res[r11], XS1_SETC_COND_NONE     // clear any prior COND_AFTER so 'in' reads *now*
+    in         r4, res[r11]                     // current time
+    ldw        r8, cp[outDataTimeout]           // OUT_TIMEOUT_ticks
+    add        r4, r4, r8
+    setd       res[r11], r4                     // deadline = now + OUT_TIMEOUT
+    setc       res[r11], XS1_SETC_COND_AFTER
+    eeu        res[r11]                         // add the timer to the body-loop waiteu set
+#endif
+
 OutReady:
     BLRF_u10    doRXData                        // Leaves r1: 0
 RxRet2:
@@ -64,6 +90,26 @@ Err_RxErr:                                      // RxError signal high during da
     in        r11, res[r10]                     // Wait for rxa low and ignore packet (let transaction timout)
     setsr     2                                 // Re-enable thread interrupts
     bu        NextToken
+
+#ifndef XUD_DISABLE_OUT_DATA_TIMEOUT
+// Guard A: the one-frame OUT-data deadline fired mid-packet (dirty truncation / lost EOP /
+// stray token during the data body). Flush the partial packet and resync RxActive, then
+// return to the bounded token loop instead of hanging on the bare body 'in'. The buffer is
+// left "ready" and un-ACKed, so the host simply retries the transaction. Reached as a thread
+// EVENT from the body-loop waiteu (timer is IE_MODE_EVENT); recovery mirrors Err_RxErr but
+// needs no interrupt entry/exit and must not block on RxA (the packet may never end).
+.align FUNCTION_ALIGNMENT
+RxDataTimeout:
+    clre                                        // drop all (now stale) event enables
+    ldw       r11, sp[STACK_OUT_TIMER]
+    in        r11, res[r11]                     // clear the timer's event condition
+    ldw       r10, sp[STACK_RXE_PORT]           // re-arm RxError detection (cleared by clre)
+    eeu       res[r10]
+    ldw       r10, sp[STACK_RXA_PORT]
+    setc      res[r10], XS1_SETC_RUN_CLRBUF     // resync RxActive (non-blocking)
+    setc      res[RXD], XS1_SETC_RUN_CLRBUF     // flush the partial OUT packet
+    bu        NextToken
+#endif
 
 XUD_TokenOut_BufferFull:
   ldw       r9, sp[STACK_RXA_PORT]

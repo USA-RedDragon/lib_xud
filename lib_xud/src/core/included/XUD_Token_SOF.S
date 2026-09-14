@@ -16,6 +16,17 @@ Pid_Sof:
     // NOTE: we are not CRC checking SOF's
 xta_ep_Pid_Sof_header:
     in          r10, res[RXD]                   // Input Frame number
+#ifdef XUD_SOF_PHASE_RELOCK
+    // Guard C: capture THIS SOF's hardware arrival timestamp (bus-edge time on the RXD
+    // port) as a per-frame phase reference, re-locked on every real SOF. A phase-locked
+    // audio framing deadline (app/decouple layer) should be derived as
+    // (STACK_SOF_TIME + N*period) instead of free-running off a local timer that never
+    // re-derives phase from the bus -- a dropped/corrupt SOF (e.g. a KVM/hub glitch) then
+    // permanently mis-phases framing until power-cycle. Opt-in: NEEDS ON-HARDWARE
+    // VALIDATION (the port-time vs reference-timer relationship must be confirmed on silicon).
+    getts       r8, res[RXD]
+    stw         r8, sp[STACK_SOF_TIME]
+#endif
     shr         r10 , r10, 16                   // Shift off port junk
     ldc         r11, 0x7ff                      // Remove CRC5
     and         r10, r10, r11
@@ -60,6 +71,11 @@ Pid_Sof_NoChan:
 #else
 xta_ep_Pid_SofNC_header:
     in          r10, res[RXD]                   // Input Frame number
+#ifdef XUD_SOF_PHASE_RELOCK
+    // Guard C: see Pid_Sof above. Re-lock the frame-phase reference on every received SOF.
+    getts       r8, res[RXD]
+    stw         r8, sp[STACK_SOF_TIME]
+#endif
 #endif
     {clrsr       0x3
     ldw         r10, sp[STACK_SUSPEND_TIMER]}   // Load timer from stack

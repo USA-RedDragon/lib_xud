@@ -25,7 +25,13 @@
 #endif
 #define SUSPEND_T_WTWRSTHS_ticks    (SUSPEND_T_WTWRSTHS_us * PLATFORM_REFERENCE_MHZ)
 
+// How long we wait for OUT data after an OUT token before abandoning a stalled/truncated
+// packet (Guard A, XUD_RxData.S). Must comfortably exceed the longest legitimate packet
+// duration (worst case ~a full 1023-byte FS frame) yet be far below "forever". Override
+// with -DOUT_TIMEOUT_us=<us> if required for a particular link.
+#ifndef OUT_TIMEOUT_us
 #define OUT_TIMEOUT_us              (500)     // How long we wait for data after OUT token
+#endif
 #define OUT_TIMEOUT_ticks           (OUT_TIMEOUT_us * PLATFORM_REFERENCE_MHZ)
 #define TX_HANDSHAKE_TIMEOUT_us     (5)      // How long we wait for handshake after sending tx data
 #define TX_HANDSHAKE_TIMEOUT_ticks  (TX_HANDSHAKE_TIMEOUT_us * PLATFORM_REFERENCE_MHZ)

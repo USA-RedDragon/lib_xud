@@ -31,6 +31,15 @@ suspend_t_wtwrsths:
 .cc_bottom suspend_t_wtwrsths.data
 .text
 
+// Guard A: OUT-data body timeout interval (fills the reserved-but-dead OUT_TIMEOUT_ticks).
+.section        .cp.const4,"aMc",@progbits,4
+.cc_top outDataTimeout.data
+.align 4
+outDataTimeout:
+.long OUT_TIMEOUT_ticks
+.cc_bottom outDataTimeout.data
+.text
+
 
 #define STACK_EXTEND 32
 
@@ -38,9 +47,9 @@ suspend_t_wtwrsths:
 // 0
 // 1..7:             : Reg save
 // 8                 : Unused
-#define STACK_OUT_TIMER (9)                 // Used for out data timeout
+#define STACK_OUT_TIMER (9)                 // Guard A: dedicated OUT-data timeout timer
 #define STACK_RXA_PORT (10)                 // RXA_port
-// 11                : Unused
+#define STACK_SOF_TIME          (11)        // Guard C: hw timestamp of last received SOF (frame-phase reference)
 #define STACK_SOF_FRAME         (12)
 #define STACK_SUSPEND_TIMEOUT   (13)
 #define STACK_SUSPEND_TIMER     (14)
@@ -302,6 +311,17 @@ xta_no_pauseO:
     setc       res[r10], XS1_SETC_IE_MODE_INTERRUPT
     eeu        res[r10]                         // Enable events/interupts on resource
 
+#ifndef XUD_DISABLE_OUT_DATA_TIMEOUT
+SetupOutDataTimer:                              // Guard A: allocate the second timer (maxtimers=2) reserved
+    getr       r10, XS1_RES_TYPE_TIMER          //          by STACK_OUT_TIMER and give it a recovery vector.
+    ecallf     r10
+    stw        r10, sp[STACK_OUT_TIMER]
+    ldap       r11, RxDataTimeout
+    setv       res[r10], r11                    // vector: flush a stalled OUT-data body, resync, re-loop
+    setc       res[r10], XS1_SETC_IE_MODE_EVENT // caught by the body-loop waiteu, not as an interrupt
+                                                // (armed per-OUT in Pid_Out; disarmed by clre on clean EOP)
+#endif
+
     setc       res[RXD], XS1_SETC_RUN_CLRBUF
 
     clre
@@ -359,6 +379,12 @@ Return:
     ldw        r11, sp[STACK_SUSPEND_TIMER]         // Free suspend/reset timer
     edu        res[r11]
     freer      res[r11]
+
+#ifndef XUD_DISABLE_OUT_DATA_TIMEOUT
+    ldw        r11, sp[STACK_OUT_TIMER]             // Guard A: free the OUT-data timeout timer
+    edu        res[r11]
+    freer      res[r11]
+#endif
 
     ldw        r11, sp[STACK_RXE_PORT]              // Put RxE IE mode back to events..
     setc       res[r11], XS1_SETC_COND_NONE
